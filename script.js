@@ -13,8 +13,7 @@ import {
     where,
     addDoc,
     serverTimestamp,
-    onSnapshot,
-    deleteDoc
+    onSnapshot
 } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
 import {
     getAuth,
@@ -80,7 +79,6 @@ let currentPage = 'home';
 let viewedProfileUser = null;
 let currentChatPartner = null;
 
-// Listeners
 let unsubscribeUsers = null;
 let unsubscribeLikes = null;
 let unsubscribeMatches = null;
@@ -184,7 +182,7 @@ function listenToMatches() {
 }
 
 // ============================================
-// NAVIGATION (UPDATED WITH HIDE HEADER/NAV)
+// NAVIGATION
 // ============================================
 
 function navigateTo(page, data = null) {
@@ -198,7 +196,6 @@ function navigateTo(page, data = null) {
         btn.classList.toggle('active', btn.dataset.page === page);
     });
 
-    // Hide Nav and Header on Login & Onboarding
     if (page === 'login' || page === 'onboarding') {
         bottomNav.style.display = 'none';
         appHeader.style.display = 'none';
@@ -287,6 +284,9 @@ function renderLogin() {
         </div>
     `;
     document.getElementById('continue-btn').addEventListener('click', async () => {
+        // YEH LINE FIX HAI: Taaki hamesha Login ke baad Onboarding khule
+        localStorage.setItem('hasClickedContinue', 'true'); 
+        
         if (currentProfile) { navigateTo('home'); return; }
         currentStep = 0;
         onboardData = {};
@@ -834,6 +834,7 @@ function renderProfile() {
             allUsers = [];
             myLikes = [];
             myMatches = [];
+            localStorage.removeItem('hasClickedContinue'); // Reset flag
             navigateTo('login');
             alert('Account deleted.');
         } catch (e) {
@@ -853,6 +854,14 @@ async function init() {
     onAuthStateChanged(auth, async (user) => {
         if (user) {
             currentUser = user;
+            
+            // YEH FIX HAI: Agar user ne Continue nahi dabaya, toh Login dikhao
+            const hasClickedContinue = localStorage.getItem('hasClickedContinue');
+            if (!hasClickedContinue) {
+                navigateTo('login');
+                return;
+            }
+
             const docRef = doc(db, 'users', user.uid);
             const docSnap = await getDoc(docRef);
             
