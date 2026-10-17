@@ -13,12 +13,14 @@ import {
     where,
     addDoc,
     serverTimestamp,
-    onSnapshot
+    onSnapshot,
+    deleteDoc
 } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
 import {
     getAuth,
     signInAnonymously,
-    onAuthStateChanged
+    onAuthStateChanged,
+    signOut
 } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
 
 // ============================================
@@ -67,16 +69,21 @@ const AVATAR_COLORS = [
 // STATE
 // ============================================
 
-let currentUser = null;       // Firebase user
-let currentProfile = null;    // User profile data
-let allUsers = [];            // All users
-let myLikes = [];             // Likes I sent
-let myMatches = [];           // My matches
+let currentUser = null;
+let currentProfile = null;
+let allUsers = [];
+let myLikes = [];
+let myMatches = [];
 let currentStep = 0;
 let onboardData = {};
 let currentPage = 'home';
 let viewedProfileUser = null;
 let currentChatPartner = null;
+
+// Listeners
+let unsubscribeUsers = null;
+let unsubscribeLikes = null;
+let unsubscribeMatches = null;
 let unsubscribeMessages = null;
 
 // ============================================
@@ -109,6 +116,69 @@ function renderAvatar(name, size = 44) {
     const color = getAvatarColor(name || '');
     const initial = getInitial(name);
     return `<div class="avatar-circle" style="background:${color};width:${size}px;height:${size}px;font-size:${size * 0.4}px;">${initial}</div>`;
+}
+
+// ============================================
+// REAL-TIME LISTENERS (FIXED)
+// ============================================
+
+function listenToUsers() {
+    if (unsubscribeUsers) unsubscribeUsers();
+    const q = collection(db, 'users');
+    unsubscribeUsers = onSnapshot(q, (snap) => {
+        allUsers = [];
+        snap.forEach(d => allUsers.push({ id: d.id, ...d.data() }));
+        if (currentPage === 'home') renderHome();
+        if (currentPage === 'search') applySearch();
+    });
+}
+
+function listenToLikes() {
+    if (!currentUser) return;
+    if (unsubscribeLikes) unsubscribeLikes();
+    const q = query(collection(db, 'likes'), where('from_user', '==', currentUser.uid));
+    unsubscribeLikes = onSnapshot(q, (snap) => {
+        myLikes = [];
+        snap.forEach(d => myLikes.push({ id: d.id, ...d.data() }));
+        if (currentPage === 'home') renderHome();
+        if (currentPage === 'profile-view' && viewedProfileUser) renderProfileView({ user: viewedProfileUser });
+    });
+}
+
+function listenToMatches() {
+    if (!currentUser) return;
+    if (unsubscribeMatches) unsubscribeMatches();
+    
+    const q1 = query(collection(db, 'matches'), where('user1', '==', currentUser.uid));
+    const q2 = query(collection(db, 'matches'), where('user2', '==', currentUser.uid));
+
+    const unsub1 = onSnapshot(q1, (snap1) => {
+        const m1 = [];
+        snap1.forEach(d => m1.push({ id: d.id, ...d.data() }));
+        const m2 = myMatches.filter(m => m.user2 === currentUser.uid);
+        myMatches = [...m1, ...m2];
+        myMatches = Array.from(new Set(myMatches.map(m => m.id))).map(id => myMatches.find(m => m.id === id));
+        
+        if (currentPage === 'home') renderHome();
+        if (currentPage === 'matches') renderMatches();
+        if (currentPage === 'messages') renderMessages();
+        if (currentPage === 'profile-view' && viewedProfileUser) renderProfileView({ user: viewedProfileUser });
+    });
+
+    const unsub2 = onSnapshot(q2, (snap2) => {
+        const m2 = [];
+        snap2.forEach(d => m2.push({ id: d.id, ...d.data() }));
+        const m1 = myMatches.filter(m => m.user1 === currentUser.uid);
+        myMatches = [...m1, ...m2];
+        myMatches = Array.from(new Set(myMatches.map(m => m.id))).map(id => myMatches.find(m => m.id === id));
+        
+        if (currentPage === 'home') renderHome();
+        if (currentPage === 'matches') renderMatches();
+        if (currentPage === 'messages') renderMessages();
+        if (currentPage === 'profile-view' && viewedProfileUser) renderProfileView({ user: viewedProfileUser });
+    });
+
+    unsubscribeMatches = () => { unsub1(); unsub2(); };
 }
 
 // ============================================
@@ -180,75 +250,6 @@ function updateHeaderRight() {
         messagesBtn.innerHTML = '<i class="fas fa-paper-plane" style="color:var(--primary);font-size:20px;"></i>';
         messagesBtn.addEventListener('click', () => navigateTo('messages'));
         headerRight.appendChild(messagesBtn);
-    }
-}
-
-// ============================================
-// FIRESTORE HELPERS
-// ============================================
-
-async function loadAllUsers() {
-    try {
-        const snap = await getDocs(collection(db, 'users'));
-        allUsers = [];
-        snap.forEach(d => {
-            allUsers.push({ id: d.id, ...d.data() });
-        });
-        console.log('Users loaded:', allUsers.length);
-    } catch (e) {
-        console.error('Load users error:', e);
-    }
-}
-
-async function loadMyLikes() {
-    if (!currentUser) return;
-    try {
-        const q = query(collection(db, 'likes'), where('from_user', '==', currentUser.uid));
-        const snap = await getDocs(q);
-        myLikes = [];
-        snap.forEach(d => {
-            myLikes.push({ id: d.id, ...d.data() });
-        });
-        console.log('My likes:', myLikes.length);
-    } catch (e) {
-        console.error('Load likes error:', e);
-    }
-}
-
-async function loadMyMatches() {
-    if (!currentUser) return;
-    try {
-        const q1 = query(collection(db, 'matches'), where('user1', '==', currentUser.uid));
-        const q2 = query(collection(db, 'matches'), where('user2', '==', currentUser.uid));
-        const [snap1, snap2] = await Promise.all([getDocs(q1), getDocs(q2)]);
-        myMatches = [];
-        snap1.forEach(d => myMatches.push({ id: d.id, ...d.data() }));
-        snap2.forEach(d => {
-            if (!myMatches.find(m => m.id === d.id)) {
-                myMatches.push({ id: d.id, ...d.data() });
-            }
-        });
-        console.log('My matches:', myMatches.length);
-    } catch (e) {
-        console.error('Load matches error:', e);
-    }
-}
-
-// ============================================
-// LOAD USER PROFILE
-// ============================================
-
-async function loadUserProfile(uid) {
-    try {
-        const docRef = doc(db, 'users', uid);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-            return { id: docSnap.id, ...docSnap.data() };
-        }
-        return null;
-    } catch (e) {
-        console.error('Load profile error:', e);
-        return null;
     }
 }
 
@@ -420,9 +421,12 @@ async function finishOnboarding() {
     try {
         await setDoc(doc(db, 'users', currentUser.uid), userData);
         currentProfile = { id: currentUser.uid, ...userData };
-        await loadAllUsers();
-        await loadMyLikes();
-        await loadMyMatches();
+        
+        // Start Listeners
+        listenToUsers();
+        listenToLikes();
+        listenToMatches();
+        
         navigateTo('home');
     } catch (e) {
         console.error('Save user error:', e);
@@ -478,7 +482,6 @@ function renderHome() {
     appContent.innerHTML = html;
 }
 
-// Global functions (for onclick)
 window.viewProfile = function(userId) {
     const user = allUsers.find(u => u.id === userId);
     if (!user) return;
@@ -504,7 +507,6 @@ window.handleMatchAction = async function(targetId) {
     const isLiked = myLikes.some(l => l.to_user === targetId);
     if (isLiked) { alert('Request already sent!'); return; }
 
-    // Check if target liked me
     try {
         const q = query(collection(db, 'likes'),
             where('from_user', '==', targetId),
@@ -512,27 +514,20 @@ window.handleMatchAction = async function(targetId) {
         );
         const snap = await getDocs(q);
         if (!snap.empty) {
-            // MATCH!
             await addDoc(collection(db, 'matches'), {
                 user1: currentUser.uid,
                 user2: targetId,
                 createdAt: serverTimestamp()
             });
-            await loadMyMatches();
             alert(`🎉 You matched with ${target.name}!`);
-            renderHome();
-            return;
+        } else {
+            await addDoc(collection(db, 'likes'), {
+                from_user: currentUser.uid,
+                to_user: targetId,
+                createdAt: serverTimestamp()
+            });
+            alert(`❤️ Request sent to ${target.name}`);
         }
-
-        // Just send like
-        await addDoc(collection(db, 'likes'), {
-            from_user: currentUser.uid,
-            to_user: targetId,
-            createdAt: serverTimestamp()
-        });
-        await loadMyLikes();
-        alert(`❤️ Request sent to ${target.name}`);
-        renderHome();
     } catch (e) {
         console.error('Match action error:', e);
         alert('Error: ' + e.message);
@@ -712,7 +707,6 @@ function renderChat(data) {
         if (e.key === 'Enter') sendMessage(partner.id);
     });
 
-    // Real-time messages
     const matchId = getMatchId(partner.id);
     const q = query(collection(db, 'messages'), where('match_id', '==', matchId));
     unsubscribeMessages = onSnapshot(q, (snap) => {
@@ -821,10 +815,8 @@ function renderProfile() {
     document.getElementById('delete-account-btn').addEventListener('click', async () => {
         if (!confirm('Delete account? This cannot be undone.')) return;
         try {
-            // Delete profile
             await setDoc(doc(db, 'users', currentUser.uid), {}, { merge: false });
-            // Sign out
-            await auth.signOut();
+            await signOut(auth);
             currentUser = null;
             currentProfile = null;
             allUsers = [];
@@ -844,25 +836,27 @@ function renderProfile() {
 // ============================================
 
 async function init() {
-    // Loading screen
     appContent.innerHTML = `<div class="loading-screen"><div class="spinner"></div><p style="color:var(--text-light);">Loading Mehboob...</p></div>`;
 
     onAuthStateChanged(auth, async (user) => {
         if (user) {
             currentUser = user;
-            const profile = await loadUserProfile(user.uid);
-            if (profile) {
-                currentProfile = profile;
-                await loadAllUsers();
-                await loadMyLikes();
-                await loadMyMatches();
+            const docRef = doc(db, 'users', user.uid);
+            const docSnap = await getDoc(docRef);
+            
+            if (docSnap.exists()) {
+                currentProfile = { id: docSnap.id, ...docSnap.data() };
+                
+                // Start Real-time Listeners
+                listenToUsers();
+                listenToLikes();
+                listenToMatches();
+                
                 navigateTo('home');
             } else {
-                // Auth but no profile → onboarding
                 navigateTo('onboarding');
             }
         } else {
-            // No auth → sign in anonymously
             try {
                 await signInAnonymously(auth);
             } catch (e) {
