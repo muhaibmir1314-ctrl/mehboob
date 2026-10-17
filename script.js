@@ -95,6 +95,8 @@ const headerTitle = document.getElementById('header-title');
 const headerBackBtn = document.getElementById('header-back-btn');
 const headerRight = document.getElementById('header-right');
 const navBtns = document.querySelectorAll('.nav-btn');
+const bottomNav = document.getElementById('bottom-nav');
+const appHeader = document.getElementById('app-header');
 
 // ============================================
 // AVATAR HELPER
@@ -119,7 +121,7 @@ function renderAvatar(name, size = 44) {
 }
 
 // ============================================
-// REAL-TIME LISTENERS (FIXED)
+// REAL-TIME LISTENERS
 // ============================================
 
 function listenToUsers() {
@@ -182,7 +184,7 @@ function listenToMatches() {
 }
 
 // ============================================
-// NAVIGATION
+// NAVIGATION (UPDATED WITH HIDE HEADER/NAV)
 // ============================================
 
 function navigateTo(page, data = null) {
@@ -191,9 +193,20 @@ function navigateTo(page, data = null) {
         unsubscribeMessages = null;
     }
     currentPage = page;
+    
     navBtns.forEach(btn => {
         btn.classList.toggle('active', btn.dataset.page === page);
     });
+
+    // Hide Nav and Header on Login & Onboarding
+    if (page === 'login' || page === 'onboarding') {
+        bottomNav.style.display = 'none';
+        appHeader.style.display = 'none';
+    } else {
+        bottomNav.style.display = 'flex';
+        appHeader.style.display = 'flex';
+    }
+
     const backPages = ['onboarding', 'chat', 'messages', 'profile-view'];
     headerBackBtn.style.display = backPages.includes(page) ? 'block' : 'none';
 
@@ -422,7 +435,6 @@ async function finishOnboarding() {
         await setDoc(doc(db, 'users', currentUser.uid), userData);
         currentProfile = { id: currentUser.uid, ...userData };
         
-        // Start Listeners
         listenToUsers();
         listenToLikes();
         listenToMatches();
@@ -847,7 +859,6 @@ async function init() {
             if (docSnap.exists()) {
                 currentProfile = { id: docSnap.id, ...docSnap.data() };
                 
-                // Start Real-time Listeners
                 listenToUsers();
                 listenToLikes();
                 listenToMatches();
