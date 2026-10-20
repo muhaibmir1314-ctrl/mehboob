@@ -13,7 +13,8 @@ import {
     where,
     addDoc,
     serverTimestamp,
-    onSnapshot
+    onSnapshot,
+    deleteDoc
 } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
 import {
     getAuth,
@@ -25,7 +26,6 @@ import {
 // ============================================
 // FIREBASE CONFIG
 // ============================================
-
 const firebaseConfig = {
     apiKey: "AIzaSyD_soaQHORvmGv5tWyhOMgbF0BIsirWLlM",
     authDomain: "mehboob-f9765.firebaseapp.com",
@@ -40,39 +40,18 @@ const db = getFirestore(app);
 const auth = getAuth(app);
 
 // ============================================
-// DATA
+// DATA & STATE
 // ============================================
-
-const DISTRICTS = [
-    "Srinagar", "Baramulla", "Anantnag", "Kupwara",
-    "Bandipora", "Ganderbal", "Budgam", "Pulwama",
-    "Shopian", "Kulgam"
-];
-
-const CASTES = [
-    "Bhat", "Mir", "Kumar", "Dar", "Zargar", "Malik", "Sheikh",
-    "Raina", "Khan", "Parray", "Khawaja", "Rather", "Shah",
-    "Ganaie", "Wani", "Geelani", "Khar", "Waza", "Lone", "Kachru",
-    "Khandey", "Chopan", "Hajjam", "Syed", "Peer", "Mattoo",
-    "Kachroo", "Ahanger", "Pirzada", "Teli", "Reshi", "Hakeem",
-    "Gojar", "Qureshi", "Pahari", "Mughal", "Sufi", "Qadri",
-    "Hamdani", "Gurezi"
-];
-
-const AVATAR_COLORS = [
-    "#D4A373", "#CC8B5C", "#8B5A2B", "#A8703C", "#C4956A",
-    "#B5476B", "#3498DB", "#27AE60", "#E67E22", "#9B59B6"
-];
-
-// ============================================
-// STATE
-// ============================================
+const DISTRICTS = ["Srinagar", "Baramulla", "Anantnag", "Kupwara", "Bandipora", "Ganderbal", "Budgam", "Pulwama", "Shopian", "Kulgam"];
+const CASTES = ["Bhat", "Mir", "Kumar", "Dar", "Zargar", "Malik", "Sheikh", "Raina", "Khan", "Parray", "Khawaja", "Rather", "Shah", "Ganaie", "Wani", "Geelani", "Khar", "Waza", "Lone", "Kachru", "Khandey", "Chopan", "Hajjam", "Syed", "Peer", "Mattoo", "Kachroo", "Ahanger", "Pirzada", "Teli", "Reshi", "Hakeem", "Gojar", "Qureshi", "Pahari", "Mughal", "Sufi", "Qadri", "Hamdani", "Gurezi"];
+const AVATAR_COLORS = ["#D4A373", "#CC8B5C", "#8B5A2B", "#A8703C", "#C4956A", "#B5476B", "#3498DB", "#27AE60", "#E67E22", "#9B59B6"];
 
 let currentUser = null;
 let currentProfile = null;
 let allUsers = [];
 let myLikes = [];
 let myMatches = [];
+let myRequests = []; // Naya: Incoming requests
 let currentStep = 0;
 let onboardData = {};
 let currentPage = 'home';
@@ -87,7 +66,6 @@ let unsubscribeMessages = null;
 // ============================================
 // DOM REFS
 // ============================================
-
 const appContent = document.getElementById('app-content');
 const headerTitle = document.getElementById('header-title');
 const headerBackBtn = document.getElementById('header-back-btn');
@@ -97,31 +75,23 @@ const bottomNav = document.getElementById('bottom-nav');
 const appHeader = document.getElementById('app-header');
 
 // ============================================
-// AVATAR HELPER
+// HELPERS
 // ============================================
-
 function getAvatarColor(name) {
     let hash = 0;
-    for (let i = 0; i < name.length; i++) {
-        hash = name.charCodeAt(i) + ((hash << 5) - hash);
-    }
+    for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
     return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
-}
-
-function getInitial(name) {
-    return (name || '?').charAt(0).toUpperCase();
 }
 
 function renderAvatar(name, size = 44) {
     const color = getAvatarColor(name || '');
-    const initial = getInitial(name);
+    const initial = (name || '?').charAt(0).toUpperCase();
     return `<div class="avatar-circle" style="background:${color};width:${size}px;height:${size}px;font-size:${size * 0.4}px;">${initial}</div>`;
 }
 
 // ============================================
 // REAL-TIME LISTENERS
 // ============================================
-
 function listenToUsers() {
     if (unsubscribeUsers) unsubscribeUsers();
     const q = collection(db, 'users');
@@ -136,13 +106,25 @@ function listenToUsers() {
 function listenToLikes() {
     if (!currentUser) return;
     if (unsubscribeLikes) unsubscribeLikes();
-    const q = query(collection(db, 'likes'), where('from_user', '==', currentUser.uid));
-    unsubscribeLikes = onSnapshot(q, (snap) => {
+    
+    // 1. Jo maine like kiya (Sent)
+    const q1 = query(collection(db, 'likes'), where('from_user', '==', currentUser.uid));
+    const unsub1 = onSnapshot(q1, (snap) => {
         myLikes = [];
         snap.forEach(d => myLikes.push({ id: d.id, ...d.data() }));
         if (currentPage === 'home') renderHome();
         if (currentPage === 'profile-view' && viewedProfileUser) renderProfileView({ user: viewedProfileUser });
     });
+
+    // 2. Jisne mujhe like kiya (Incoming Requests)
+    const q2 = query(collection(db, 'likes'), where('to_user', '==', currentUser.uid));
+    const unsub2 = onSnapshot(q2, (snap) => {
+        myRequests = [];
+        snap.forEach(d => myRequests.push({ id: d.id, ...d.data() }));
+        if (currentPage === 'matches') renderMatches();
+    });
+
+    unsubscribeLikes = () => { unsub1(); unsub2(); };
 }
 
 function listenToMatches() {
@@ -158,11 +140,9 @@ function listenToMatches() {
         const m2 = myMatches.filter(m => m.user2 === currentUser.uid);
         myMatches = [...m1, ...m2];
         myMatches = Array.from(new Set(myMatches.map(m => m.id))).map(id => myMatches.find(m => m.id === id));
-        
         if (currentPage === 'home') renderHome();
         if (currentPage === 'matches') renderMatches();
         if (currentPage === 'messages') renderMessages();
-        if (currentPage === 'profile-view' && viewedProfileUser) renderProfileView({ user: viewedProfileUser });
     });
 
     const unsub2 = onSnapshot(q2, (snap2) => {
@@ -171,11 +151,9 @@ function listenToMatches() {
         const m1 = myMatches.filter(m => m.user1 === currentUser.uid);
         myMatches = [...m1, ...m2];
         myMatches = Array.from(new Set(myMatches.map(m => m.id))).map(id => myMatches.find(m => m.id === id));
-        
         if (currentPage === 'home') renderHome();
         if (currentPage === 'matches') renderMatches();
         if (currentPage === 'messages') renderMessages();
-        if (currentPage === 'profile-view' && viewedProfileUser) renderProfileView({ user: viewedProfileUser });
     });
 
     unsubscribeMatches = () => { unsub1(); unsub2(); };
@@ -184,17 +162,11 @@ function listenToMatches() {
 // ============================================
 // NAVIGATION
 // ============================================
-
 function navigateTo(page, data = null) {
-    if (unsubscribeMessages) {
-        unsubscribeMessages();
-        unsubscribeMessages = null;
-    }
+    if (unsubscribeMessages) { unsubscribeMessages(); unsubscribeMessages = null; }
     currentPage = page;
     
-    navBtns.forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.page === page);
-    });
+    navBtns.forEach(btn => btn.classList.toggle('active', btn.dataset.page === page));
 
     if (page === 'login' || page === 'onboarding') {
         bottomNav.style.display = 'none';
@@ -225,13 +197,9 @@ headerBackBtn.addEventListener('click', () => {
     if (currentPage === 'onboarding') {
         if (currentStep > 0) { currentStep--; renderOnboarding(); }
         else navigateTo('login');
-    } else if (currentPage === 'chat') {
-        navigateTo('matches');
-    } else if (currentPage === 'messages' || currentPage === 'profile-view') {
-        navigateTo('home');
-    } else {
-        navigateTo('home');
-    }
+    } else if (currentPage === 'chat') navigateTo('matches');
+    else if (currentPage === 'messages' || currentPage === 'profile-view') navigateTo('home');
+    else navigateTo('home');
 });
 
 navBtns.forEach(btn => {
@@ -243,13 +211,9 @@ navBtns.forEach(btn => {
 });
 
 function setHeaderTitle(page, title, icon = null) {
-    if (page === 'home') {
-        headerTitle.innerHTML = `<span style="color:#C4956A;font-size:20px;">🍁</span> Mehboob`;
-    } else if (icon) {
-        headerTitle.innerHTML = `<span class="header-title-with-icon"><i class="fas fa-${icon}"></i> ${title}</span>`;
-    } else {
-        headerTitle.textContent = title;
-    }
+    if (page === 'home') headerTitle.innerHTML = `<span style="color:#C4956A;font-size:20px;">🍁</span> Mehboob`;
+    else if (icon) headerTitle.innerHTML = `<span class="header-title-with-icon"><i class="fas fa-${icon}"></i> ${title}</span>`;
+    else headerTitle.textContent = title;
 }
 
 function updateHeaderRight() {
@@ -264,9 +228,8 @@ function updateHeaderRight() {
 }
 
 // ============================================
-// RENDER: LOGIN
+// RENDER: LOGIN & ONBOARDING
 // ============================================
-
 function renderLogin() {
     setHeaderTitle('login', 'Login');
     updateHeaderRight();
@@ -283,20 +246,12 @@ function renderLogin() {
             </div>
         </div>
     `;
-    document.getElementById('continue-btn').addEventListener('click', async () => {
-        // YEH LINE FIX HAI: Taaki hamesha Login ke baad Onboarding khule
+    document.getElementById('continue-btn').addEventListener('click', () => {
         localStorage.setItem('hasClickedContinue', 'true'); 
-        
         if (currentProfile) { navigateTo('home'); return; }
-        currentStep = 0;
-        onboardData = {};
-        navigateTo('onboarding');
+        currentStep = 0; onboardData = {}; navigateTo('onboarding');
     });
 }
-
-// ============================================
-// RENDER: ONBOARDING
-// ============================================
 
 const onboardingSteps = [
     { id: 'name', label: "What's your name?", subtitle: "What should we call you?", type: 'text', placeholder: 'Enter your name' },
@@ -319,9 +274,7 @@ function renderOnboarding() {
     if (step.type === 'text') {
         const maxAttr = step.maxlength ? `maxlength="${step.maxlength}"` : '';
         html += `<input type="text" id="onboard-input" placeholder="${step.placeholder}" ${maxAttr} />`;
-        if (step.maxlength) {
-            html += `<div class="char-counter"><span id="char-counter">0</span>/${step.maxlength}</div>`;
-        }
+        if (step.maxlength) html += `<div class="char-counter"><span id="char-counter">0</span>/${step.maxlength}</div>`;
     } else if (step.type === 'number') {
         html += `<input type="number" id="onboard-input" placeholder="${step.placeholder}" min="${step.min}" max="${step.max}" />`;
     } else if (step.type === 'select') {
@@ -410,57 +363,41 @@ function handleOnboardNext() {
         onboardData[step.id] = val;
     }
 
-    if (currentStep === onboardingSteps.length - 1) {
-        finishOnboarding();
-    } else {
-        currentStep++;
-        renderOnboarding();
-    }
+    if (currentStep === onboardingSteps.length - 1) finishOnboarding();
+    else { currentStep++; renderOnboarding(); }
 }
 
 async function finishOnboarding() {
-    if (!currentUser) {
-        alert('Auth error. Please refresh.');
-        return;
-    }
+    if (!currentUser) return alert('Auth error.');
     const userData = {
-        name: onboardData.name || "",
-        age: onboardData.age || 0,
-        district: onboardData.district || "",
-        caste: onboardData.caste || "",
-        bio: onboardData.bio || "",
-        createdAt: serverTimestamp()
+        name: onboardData.name || "", age: onboardData.age || 0,
+        district: onboardData.district || "", caste: onboardData.caste || "",
+        bio: onboardData.bio || "", createdAt: serverTimestamp()
     };
     try {
         await setDoc(doc(db, 'users', currentUser.uid), userData);
         currentProfile = { id: currentUser.uid, ...userData };
-        
-        listenToUsers();
-        listenToLikes();
-        listenToMatches();
-        
+        listenToUsers(); listenToLikes(); listenToMatches();
         navigateTo('home');
     } catch (e) {
-        console.error('Save user error:', e);
         alert('Error saving profile: ' + e.message);
     }
 }
 
 // ============================================
-// RENDER: HOME
+// RENDER: HOME (With Ad Box & Scroll Fix)
 // ============================================
-
 function renderHome() {
     setHeaderTitle('home');
     updateHeaderRight();
 
-    const available = allUsers.filter(u => u.id !== currentUser?.uid);
+    const available = allUsers.filter(u => u.id !== currentUser?.uid && u.name);
     let html = `<div class="feed-container">`;
 
     if (available.length === 0) {
         html += `<div class="feed-empty"><i class="fas fa-users"></i><p>No users yet</p><span>Be the first to join!</span></div>`;
     } else {
-        available.forEach(user => {
+        available.forEach((user, index) => {
             const isLiked = myLikes.some(l => l.to_user === user.id);
             const isMatched = myMatches.some(m =>
                 (m.user1 === currentUser.uid && m.user2 === user.id) ||
@@ -470,6 +407,15 @@ function renderHome() {
             let btnClass = 'feed-action-btn request';
             if (isMatched) { btnText = '💬 Chat'; btnClass = 'feed-action-btn chat'; }
             else if (isLiked) { btnText = '⏳ Requested'; btnClass = 'feed-action-btn requested'; }
+
+            // Har 15 account ke baad Ad box
+            if (index > 0 && index % 15 === 0) {
+                html += `<div class="feed-card" style="background:#FFF8F0; text-align:center; padding:20px; border: 1px dashed var(--primary);">
+                    <p style="font-size:12px; color:var(--text-light);">SPONSORED</p>
+                    <p style="font-weight:600; margin-top:5px;">Your Ad Here</p>
+                    <p style="font-size:12px; color:var(--text-light);">Upgrade to Premium to remove ads</p>
+                </div>`;
+            }
 
             html += `
                 <div class="feed-card" onclick="window.viewProfile('${user.id}')">
@@ -494,6 +440,9 @@ function renderHome() {
     appContent.innerHTML = html;
 }
 
+// ============================================
+// PROFILE VIEW
+// ============================================
 window.viewProfile = function(userId) {
     const user = allUsers.find(u => u.id === userId);
     if (!user) return;
@@ -501,60 +450,10 @@ window.viewProfile = function(userId) {
     navigateTo('profile-view', { user });
 };
 
-window.handleMatchAction = async function(targetId) {
-    if (!currentUser) { navigateTo('login'); return; }
-    const target = allUsers.find(u => u.id === targetId);
-    if (!target) return;
-
-    const isMatched = myMatches.some(m =>
-        (m.user1 === currentUser.uid && m.user2 === targetId) ||
-        (m.user2 === currentUser.uid && m.user1 === targetId)
-    );
-    if (isMatched) {
-        currentChatPartner = target;
-        navigateTo('chat', { partner: target });
-        return;
-    }
-
-    const isLiked = myLikes.some(l => l.to_user === targetId);
-    if (isLiked) { alert('Request already sent!'); return; }
-
-    try {
-        const q = query(collection(db, 'likes'),
-            where('from_user', '==', targetId),
-            where('to_user', '==', currentUser.uid)
-        );
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-            await addDoc(collection(db, 'matches'), {
-                user1: currentUser.uid,
-                user2: targetId,
-                createdAt: serverTimestamp()
-            });
-            alert(`🎉 You matched with ${target.name}!`);
-        } else {
-            await addDoc(collection(db, 'likes'), {
-                from_user: currentUser.uid,
-                to_user: targetId,
-                createdAt: serverTimestamp()
-            });
-            alert(`❤️ Request sent to ${target.name}`);
-        }
-    } catch (e) {
-        console.error('Match action error:', e);
-        alert('Error: ' + e.message);
-    }
-};
-
-// ============================================
-// RENDER: PROFILE VIEW
-// ============================================
-
 function renderProfileView(data) {
     const user = data?.user || viewedProfileUser;
-    if (!user) { navigateTo('home'); return; }
+    if (!user) return navigateTo('home');
     setHeaderTitle('profile-view', `${user.name}, ${user.age}`);
-    updateHeaderRight();
 
     const isLiked = myLikes.some(l => l.to_user === user.id);
     const isMatched = myMatches.some(m =>
@@ -588,91 +487,81 @@ function renderProfileView(data) {
     `;
 }
 
-window.openChatFromProfile = function(partnerId) {
-    const partner = allUsers.find(u => u.id === partnerId);
-    currentChatPartner = partner;
-    navigateTo('chat', { partner });
-};
-
-window.handleMatchActionFromProfile = async function(targetId) {
-    await window.handleMatchAction(targetId);
-    const user = allUsers.find(u => u.id === targetId);
-    if (user) navigateTo('profile-view', { user });
-};
-
 // ============================================
-// RENDER: SEARCH
+// MATCH LOGIC (SEND REQUEST)
 // ============================================
+window.handleMatchAction = async function(targetId) {
+    if (!currentUser) return;
+    const target = allUsers.find(u => u.id === targetId);
+    if (!target) return;
 
-function renderSearch() {
-    setHeaderTitle('search', 'Search', 'search');
-    updateHeaderRight();
-    let html = `
-        <div class="search-container">
-            <div class="search-filter">
-                <input type="text" id="search-name-input" placeholder="Search by name..." />
-            </div>
-            <div class="search-filter">
-                <select id="district-filter">
-                    <option value="">All Districts</option>
-    `;
-    DISTRICTS.forEach(d => { html += `<option value="${d}">${d}</option>`; });
-    html += `</select></div>
-            <button id="search-apply-btn">Apply</button>
-            <div id="search-results-wrapper"><div id="search-results"></div></div>
-        </div>
-    `;
-    appContent.innerHTML = html;
-    document.getElementById('search-apply-btn').addEventListener('click', applySearch);
-    document.getElementById('search-name-input').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') applySearch();
-    });
-    applySearch();
-}
-
-function applySearch() {
-    const nameQuery = document.getElementById('search-name-input')?.value.trim().toLowerCase() || '';
-    const district = document.getElementById('district-filter')?.value || '';
-    const container = document.getElementById('search-results');
-    let results = allUsers.filter(u => u.id !== currentUser?.uid);
-    if (nameQuery) results = results.filter(u => u.name.toLowerCase().includes(nameQuery));
-    if (district) results = results.filter(u => u.district === district);
-    if (!container) return;
-    if (results.length === 0) {
-        container.innerHTML = `<p style="color:var(--text-light);text-align:center;padding:20px;">No users found</p>`;
-        return;
+    const isMatched = myMatches.some(m => (m.user1 === currentUser.uid && m.user2 === targetId) || (m.user2 === currentUser.uid && m.user1 === targetId));
+    if (isMatched) {
+        currentChatPartner = target;
+        return navigateTo('chat', { partner: target });
     }
-    container.innerHTML = results.map(u => {
-        const alreadyLiked = myLikes.some(l => l.to_user === u.id);
-        return `
-            <div class="search-result-card" onclick="window.viewProfile('${u.id}')">
-                ${renderAvatar(u.name)}
-                <div class="info"><h4>${u.name}, ${u.age}</h4><p>${u.district}</p></div>
-                <button class="like-btn ${alreadyLiked ? 'liked' : ''}" onclick="event.stopPropagation(); window.handleMatchAction('${u.id}')">${alreadyLiked ? '❤️ Liked' : '🤍 Like'}</button>
-            </div>
-        `;
-    }).join('');
-}
+
+    const isLiked = myLikes.some(l => l.to_user === targetId);
+    if (isLiked) return alert('Request already sent!');
+
+    try {
+        // Check if target already sent request to me
+        const q = query(collection(db, 'likes'), where('from_user', '==', targetId), where('to_user', '==', currentUser.uid));
+        const snap = await getDocs(q);
+        
+        if (!snap.empty) {
+            // MATCH! Target ne pehle hi request bhej di thi
+            await addDoc(collection(db, 'matches'), { user1: currentUser.uid, user2: targetId, createdAt: serverTimestamp() });
+            alert(`🎉 You matched with ${target.name}!`);
+        } else {
+            // Send normal request
+            await addDoc(collection(db, 'likes'), { from_user: currentUser.uid, to_user: targetId, createdAt: serverTimestamp() });
+            alert(`❤️ Request sent to ${target.name}`);
+        }
+    } catch (e) { alert('Error: ' + e.message); }
+};
 
 // ============================================
-// RENDER: MATCHES
+// RENDER: MATCHES (ACCEPT SYSTEM)
 // ============================================
-
 function renderMatches() {
     setHeaderTitle('matches', 'Matches', 'heart');
-    updateHeaderRight();
-    let html = `<div class="matches-container"><div id="matches-list">`;
-    if (myMatches.length === 0) {
+    
+    let html = `<div class="matches-container"><div id="matches-list" style="overflow-y:auto; max-height:70vh;">`;
+
+    // 1. INCOMING REQUESTS SECTION
+    if (myRequests.length > 0) {
+        html += `<p style="font-size:14px;font-weight:600;color:var(--primary);margin:10px 0;">New Requests (${myRequests.length})</p>`;
+        html += myRequests.map(req => {
+            const sender = allUsers.find(u => u.id === req.from_user);
+            if (!sender || !sender.name) return '';
+            return `
+                <div class="match-card" style="border:1px solid var(--primary);">
+                    ${renderAvatar(sender.name)}
+                    <div class="info"><h4>${sender.name}, ${sender.age}</h4><p>📍 ${sender.district}</p></div>
+                    <div style="display:flex; gap:5px;">
+                        <button onclick="window.acceptRequest('${sender.id}')" style="background:var(--primary); color:white; border:none; padding:5px 10px; border-radius:5px; cursor:pointer;">Accept</button>
+                        <button onclick="window.declineRequest('${req.id}')" style="background:#FEE; color:#E74C3C; border:none; padding:5px 10px; border-radius:5px; cursor:pointer;">Decline</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        html += `<hr style="margin:15px 0; border:0; border-top:1px solid #eee;">`;
+    }
+
+    // 2. MATCHED USERS SECTION
+    if (myMatches.length === 0 && myRequests.length === 0) {
         html += `<div style="text-align:center;padding:40px 0;color:var(--text-light);">
             <i class="fas fa-heart" style="font-size:40px;opacity:0.2;display:block;margin-bottom:12px;"></i>
             <p>No matches yet</p>
-            <p style="font-size:14px;">Send match requests to connect!</p>
+            <p style="font-size:14px;">Send requests to connect!</p>
         </div>`;
-    } else {
+    } else if (myMatches.length > 0) {
+        html += `<p style="font-size:14px;font-weight:600;margin:10px 0;">Your Matches</p>`;
         html += myMatches.map(m => {
             const partnerId = m.user1 === currentUser?.uid ? m.user2 : m.user1;
             const partner = allUsers.find(u => u.id === partnerId);
-            if (!partner) return '';
+            if (!partner || !partner.name) return '';
             return `
                 <div class="match-card" onclick="window.openChatFromMatch('${partner.id}')">
                     ${renderAvatar(partner.name)}
@@ -686,6 +575,24 @@ function renderMatches() {
     appContent.innerHTML = html;
 }
 
+window.acceptRequest = async function(senderId) {
+    try {
+        await addDoc(collection(db, 'matches'), { user1: senderId, user2: currentUser.uid, createdAt: serverTimestamp() });
+        const reqToDelete = myRequests.find(r => r.from_user === senderId);
+        if(reqToDelete) await deleteDoc(doc(db, 'likes', reqToDelete.id));
+        alert('🎉 Match Accepted! You can now chat.');
+        renderMatches();
+    } catch(e) { alert('Error: '+e.message); }
+};
+
+window.declineRequest = async function(reqId) {
+    try {
+        await deleteDoc(doc(db, 'likes', reqId));
+        alert('Request declined.');
+        renderMatches();
+    } catch(e) { alert('Error: '+e.message); }
+};
+
 window.openChatFromMatch = function(partnerId) {
     const partner = allUsers.find(u => u.id === partnerId);
     currentChatPartner = partner;
@@ -693,21 +600,21 @@ window.openChatFromMatch = function(partnerId) {
 };
 
 // ============================================
-// RENDER: CHAT
+// CHAT SCREEN (WhatsApp Sticky Fix)
 // ============================================
-
 function renderChat(data) {
     const partner = data?.partner || currentChatPartner;
-    if (!partner) { navigateTo('matches'); return; }
+    if (!partner) return navigateTo('matches');
+    
     setHeaderTitle('chat', `Chat with ${partner.name}`);
-    updateHeaderRight();
-
+    
+    // CSS Fix inline for sticky header
     appContent.innerHTML = `
-        <div class="chat-container">
-            <div id="chat-messages">
+        <div class="chat-container" style="display:flex; flex-direction:column; height:100dvh; max-height:calc(100vh - 120px);">
+            <div id="chat-messages" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding-bottom:10px;">
                 <div class="msg received">👋 You matched! Say hi.</div>
             </div>
-            <div class="chat-input">
+            <div class="chat-input" style="padding:10px; background:var(--white); border-top:1px solid var(--background-dark);">
                 <input type="text" id="chat-input-field" placeholder="Type a message..." />
                 <button id="chat-send-btn"><i class="fas fa-paper-plane"></i></button>
             </div>
@@ -728,9 +635,8 @@ function renderChat(data) {
         snap.forEach(d => msgs.push({ id: d.id, ...d.data() }));
         msgs.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
 
-        if (msgs.length === 0) {
-            container.innerHTML = `<div class="msg received">👋 You matched! Say hi.</div>`;
-        } else {
+        if (msgs.length === 0) container.innerHTML = `<div class="msg received">👋 You matched! Say hi.</div>`;
+        else {
             container.innerHTML = msgs.map(m => `
                 <div class="msg ${m.sender === currentUser.uid ? 'sent' : 'received'}">${m.text}</div>
             `).join('');
@@ -755,41 +661,81 @@ async function sendMessage(partnerId) {
             createdAt: serverTimestamp()
         });
         input.value = '';
-    } catch (e) {
-        console.error('Send message error:', e);
-        alert('Failed to send message');
-    }
+    } catch (e) { console.log(e); }
 }
 
 // ============================================
-// RENDER: MESSAGES
+// SEARCH (Empty on load)
 // ============================================
+function renderSearch() {
+    setHeaderTitle('search', 'Search', 'search');
+    let html = `
+        <div class="search-container">
+            <div class="search-filter">
+                <input type="text" id="search-name-input" placeholder="Search by name..." />
+            </div>
+            <div class="search-filter">
+                <select id="district-filter">
+                    <option value="">All Districts</option>
+    `;
+    DISTRICTS.forEach(d => { html += `<option value="${d}">${d}</option>`; });
+    html += `</select></div>
+            <button id="search-apply-btn">Apply</button>
+            <div id="search-results-wrapper"><div id="search-results">
+                <p style="text-align:center;color:var(--text-light); padding:20px;">Type and Apply to search</p>
+            </div></div>
+        </div>
+    `;
+    appContent.innerHTML = html;
+    document.getElementById('search-apply-btn').addEventListener('click', applySearch);
+    document.getElementById('search-name-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') applySearch(); });
+}
 
-function renderMessages() {
-    setHeaderTitle('messages', 'Messages', 'comment-dots');
-    updateHeaderRight();
-    let html = `<div class="messages-container"><div id="messages-list">`;
-    if (myMatches.length === 0) {
-        html += `
-            <div style="text-align:center;padding:60px 20px;color:var(--text-light);">
-                <i class="fas fa-comment-dots" style="font-size:48px;opacity:0.2;display:block;margin-bottom:12px;color:var(--primary);"></i>
-                <p style="font-size:16px;font-weight:600;color:var(--text);">No messages yet</p>
-                <p style="font-size:13px;">Your chats will appear here</p>
+function applySearch() {
+    const nameQuery = document.getElementById('search-name-input')?.value.trim().toLowerCase() || '';
+    const district = document.getElementById('district-filter')?.value || '';
+    const container = document.getElementById('search-results');
+    
+    let results = allUsers.filter(u => u.id !== currentUser?.uid && u.name);
+    if (nameQuery) results = results.filter(u => u.name.toLowerCase().includes(nameQuery));
+    if (district) results = results.filter(u => u.district === district);
+    
+    if (results.length === 0) return container.innerHTML = `<p style="color:var(--text-light);text-align:center;padding:20px;">No users found</p>`;
+    
+    container.innerHTML = results.map(u => {
+        const alreadyLiked = myLikes.some(l => l.to_user === u.id);
+        return `
+            <div class="search-result-card" onclick="window.viewProfile('${u.id}')">
+                ${renderAvatar(u.name)}
+                <div class="info"><h4>${u.name}, ${u.age}</h4><p>${u.district}</p></div>
+                <button class="like-btn ${alreadyLiked ? 'liked' : ''}" onclick="event.stopPropagation(); window.handleMatchAction('${u.id}')">${alreadyLiked ? '❤️ Liked' : '🤍 Like'}</button>
             </div>
         `;
+    }).join('');
+}
+
+// ============================================
+// MESSAGES TAB & PROFILE TAB
+// ============================================
+function renderMessages() {
+    setHeaderTitle('messages', 'Messages', 'comment-dots');
+    let html = `<div class="messages-container"><div id="messages-list" style="overflow-y:auto; max-height:70vh;">`;
+    if (myMatches.length === 0) {
+        html += `<div style="text-align:center;padding:60px 20px;color:var(--text-light);">
+            <i class="fas fa-comment-dots" style="font-size:48px;opacity:0.2;display:block;margin-bottom:12px;color:var(--primary);"></i>
+            <p style="font-size:16px;font-weight:600;color:var(--text);">No messages yet</p>
+            <p style="font-size:13px;">Your chats will appear here</p>
+        </div>`;
     } else {
         myMatches.forEach(m => {
             const partnerId = m.user1 === currentUser?.uid ? m.user2 : m.user1;
             const partner = allUsers.find(u => u.id === partnerId);
-            if (!partner) return;
+            if (!partner || !partner.name) return;
             html += `
                 <div class="chat-row" onclick="window.openChatFromMatch('${partner.id}')">
                     ${renderAvatar(partner.name, 50)}
                     <div class="chat-info">
-                        <div class="chat-top">
-                            <span class="chat-name">${partner.name}</span>
-                            <span class="chat-time">now</span>
-                        </div>
+                        <div class="chat-top"><span class="chat-name">${partner.name}</span><span class="chat-time">now</span></div>
                         <div class="chat-preview">Tap to start chatting!</div>
                     </div>
                     <i class="fas fa-chevron-right chat-chevron"></i>
@@ -801,14 +747,9 @@ function renderMessages() {
     appContent.innerHTML = html;
 }
 
-// ============================================
-// RENDER: PROFILE
-// ============================================
-
 function renderProfile() {
     setHeaderTitle('profile', 'Profile', 'user');
-    updateHeaderRight();
-    if (!currentProfile) { navigateTo('login'); return; }
+    if (!currentProfile) return navigateTo('login');
 
     appContent.innerHTML = `
         <div class="profile-container">
@@ -825,64 +766,40 @@ function renderProfile() {
     `;
 
     document.getElementById('delete-account-btn').addEventListener('click', async () => {
-        if (!confirm('Delete account? This cannot be undone.')) return;
+        if (!confirm('Delete account permanently?')) return;
         try {
-            await setDoc(doc(db, 'users', currentUser.uid), {}, { merge: false });
+            await deleteDoc(doc(db, 'users', currentUser.uid));
             await signOut(auth);
-            currentUser = null;
-            currentProfile = null;
-            allUsers = [];
-            myLikes = [];
-            myMatches = [];
-            localStorage.removeItem('hasClickedContinue'); // Reset flag
+            localStorage.removeItem('hasClickedContinue');
+            currentUser = null; currentProfile = null; allUsers = []; myLikes = []; myMatches = []; myRequests = [];
             navigateTo('login');
             alert('Account deleted.');
-        } catch (e) {
-            console.error('Delete error:', e);
-            alert('Error deleting account');
-        }
+        } catch (e) { alert('Error deleting account'); }
     });
 }
 
 // ============================================
 // INIT
 // ============================================
-
 async function init() {
     appContent.innerHTML = `<div class="loading-screen"><div class="spinner"></div><p style="color:var(--text-light);">Loading Mehboob...</p></div>`;
 
     onAuthStateChanged(auth, async (user) => {
         if (user) {
             currentUser = user;
-            
-            // YEH FIX HAI: Agar user ne Continue nahi dabaya, toh Login dikhao
             const hasClickedContinue = localStorage.getItem('hasClickedContinue');
-            if (!hasClickedContinue) {
-                navigateTo('login');
-                return;
-            }
+            if (!hasClickedContinue) return navigateTo('login');
 
-            const docRef = doc(db, 'users', user.uid);
-            const docSnap = await getDoc(docRef);
-            
+            const docSnap = await getDoc(doc(db, 'users', user.uid));
             if (docSnap.exists()) {
                 currentProfile = { id: docSnap.id, ...docSnap.data() };
-                
-                listenToUsers();
-                listenToLikes();
-                listenToMatches();
-                
+                listenToUsers(); listenToLikes(); listenToMatches();
                 navigateTo('home');
             } else {
                 navigateTo('onboarding');
             }
         } else {
-            try {
-                await signInAnonymously(auth);
-            } catch (e) {
-                console.error('Auth error:', e);
-                alert('Auth failed. Check Firebase settings.');
-            }
+            try { await signInAnonymously(auth); } catch (e) { console.log(e); }
         }
     });
 }
